@@ -1,0 +1,128 @@
+const express = require("express");
+const session = require("express-session");
+const fs = require("fs");
+
+const app = express();
+app.use(express.json());
+
+app.use(session({
+  secret: "obfuscator-secret",
+  resave: false,
+  saveUninitialized: true,
+  cookie: { maxAge: 1000 * 60 * 60 * 24 * 30 }
+}));
+
+// ====== BANCO JSON ======
+function loadUsers(){
+  if(!fs.existsSync("users.json")) fs.writeFileSync("users.json","[]");
+  return JSON.parse(fs.readFileSync("users.json"));
+}
+function saveUsers(u){
+  fs.writeFileSync("users.json", JSON.stringify(u,null,2));
+}
+
+// ====== OBFUSCATOR MELHOR ======
+function randomName(){
+  return "_0x" + Math.random().toString(16).slice(2,8).toUpperCase();
+}
+
+function obfuscate(code){
+  // renomear variáveis simples
+  code = code.replace(/local\s+(\w+)/g, (m,p)=>{
+    return "local " + randomName();
+  });
+
+  // string pool simples
+  let strings = [];
+  code = code.replace(/"([^"]*)"/g, (m,p)=>{
+    strings.push(p);
+    return `_STRINGS_[${strings.length-1}]`;
+  });
+
+  let pool = "local _STRINGS_ = {\n";
+  strings.forEach(s=>{
+    pool += `"${s}",\n`;
+  });
+  pool += "}\n\n";
+
+  return "-- OBFUSCATED BY SITE\n\n" + pool + code;
+}
+
+// ====== HTML LOGIN ======
+const loginPage = `
+<!DOCTYPE html><html><body style="background:#0f0f18;color:white;font-family:arial;text-align:center">
+<h2>Login / Cadastro</h2>
+<input id="u" placeholder="Usuário"><br><br>
+<input id="p" type="password" placeholder="Senha"><br><br>
+<button onclick="reg()">Cadastrar</button>
+<button onclick="log()">Entrar</button>
+<p id="m"></p>
+<script>
+async function reg(){
+ let r=await fetch('/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:u.value,pass:p.value})});
+ m.innerText=(await r.json()).msg;
+}
+async function log(){
+ let r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:u.value,pass:p.value})});
+ let d=await r.json();
+ if(d.ok) location='/panel';
+ else m.innerText='Erro no login';
+}
+</script></body></html>`;
+
+// ====== HTML PAINEL ======
+const panelPage = `
+<!DOCTYPE html><html><body style="background:#0f0f18;color:white;font-family:arial;text-align:center">
+<h2>Lua Obfuscator</h2>
+<textarea id="code" style="width:90%;height:150px;background:#111;color:#0f0"></textarea><br>
+<button onclick="obf()">Obfuscate</button>
+<h3>Resultado</h3>
+<textarea id="out" style="width:90%;height:150px;background:#111;color:#0f0"></textarea><br>
+<button onclick="down()">Baixar .txt</button>
+<script>
+async function obf(){
+ let r=await fetch('/obfuscate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code.value})});
+ out.value=(await r.json()).result;
+}
+function down(){
+ const blob=new Blob([out.value],{type:'text/plain'});
+ const a=document.createElement('a');
+ a.href=URL.createObjectURL(blob);
+ a.download='Obfuscator_completo.txt';
+ a.click();
+}
+</script></body></html>`;
+
+// ====== ROTAS ======
+app.get("/",(req,res)=> res.send(loginPage));
+
+app.get("/panel",(req,res)=>{
+  if(!req.session.user) return res.redirect("/");
+  res.send(panelPage);
+});
+
+app.post("/register",(req,res)=>{
+  const {user,pass}=req.body;
+  let users=loadUsers();
+  if(users.find(u=>u.user===user))
+    return res.json({msg:"Usuário já existe"});
+  users.push({user,pass});
+  saveUsers(users);
+  res.json({msg:"Cadastrado!"});
+});
+
+app.post("/login",(req,res)=>{
+  const {user,pass}=req.body;
+  let users=loadUsers();
+  if(users.find(u=>u.user===user && u.pass===pass)){
+    req.session.user=user;
+    res.json({ok:true});
+  } else res.json({ok:false});
+});
+
+app.post("/obfuscate",(req,res)=>{
+  res.json({result: obfuscate(req.body.code)});
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT,()=>console.log("Rodando na porta", PORT));
